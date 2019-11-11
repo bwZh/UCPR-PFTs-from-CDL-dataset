@@ -1,0 +1,318 @@
+# UCPR land use classification----CLM5/ELM
+library(plot3D)
+library(raster)
+library(ncdf4)
+cdl_file_dir="D:\\ZBW\\Watershed\\NEW\\LULC\\LULC\\"
+cdl_file_name=list.files(cdl_file_dir,full.names = TRUE)
+
+location=read.table("D:\\E3SM\\200m\\Domain\\dem1.txt",header= TRUE,sep = ",")
+
+ni=755  #151000/200
+nj=538  #107600/200  the boundary of watershed
+
+n=62246
+index=array(0,c(n,1))
+long=array(0,c(ni*nj,1))
+lat=array(0,c(ni*nj,1))
+PFT=array(0,c(n,16))
+for (p in seq(1,1)){
+  
+  img=raster(cdl_file_name[p])
+
+  hanford=img
+  hanford=array(hanford,c(5035,3588))     # the boundary of CDL
+  # calculate the percentage of each LULC
+
+  res=200
+  # CDL resolution     
+  x_reslulc=(689116-538066)/5035  
+  y_reslulc=(197570-89930)/3588
+
+  for (i in seq(1,ni)){
+    x1=round((i-1)*res/x_reslulc)+1
+    x2=round(i*res/x_reslulc)
+    
+    
+    
+    for (j in seq(1,nj)){
+      y1=round((j-1)*res/y_reslulc)+1
+      y2=round(j*res/y_reslulc)
+      # the grid cell for different res
+      grid=hanford[x1:x2,y1:y2]
+      grid_length=length(grid)
+      
+      long[i*j]=(i-1)*res+538066+(080-066)
+      lat[i*j]=197570-(j-1)*res+(691-570)
+ # find the grid cell in domain     
+      m=which(location[,5]==long[i*j] & location[,6]==lat[i*j])
+       if (length(m)>0){
+         
+         #print(m)
+         
+         for (k in seq(1,16)){
+    #     the id of each land use 
+           type=switch(k,0,1,7,13,15,16,18,20,22,24,44,48,79,80,81,82)
+           num=length(which(grid==type))
+           PFT[m,k]=(num/grid_length)*100
+         }
+       }
+      
+    }
+  }
+  year=toString(p+2009)
+
+  nz=ncdim_def("landuse","each PFT",seq(1,16))
+  gridcell=ncdim_def("pft","gridcells",seq(1,n))
+  var_PFT=ncvar_def(name="PFT",units = "percentage",dim = list(gridcell,nz), prec = 'double')
+  
+  output_dir="D:/E3SM/200m/"
+  output=nc_create(paste(output_dir,year,".nc",sep=""),list(var_PFT))
+  var_PFT=ncvar_put(output,var_PFT,PFT)
+  nc_close(output)
+}
+
+
+#--------------sum percentage of total PFT is 100----------
+library(ncdf4)
+pft_dir="D:\\E3SM\\200m\\2010.nc"
+#pft_name=list.files(pft_dir,full.names = TRUE)
+
+n=62246
+for (i in seq(1,1)){
+  nc=nc_open(pft_dir,write = TRUE)
+  pft=ncvar_get(nc=nc,varid = 'PFT')
+  pft_temp=array(0,c(n,16))
+  for (j in seq(1,n)){
+     for (k in seq(1,16)){
+       pft_temp[j,k]=pft[j,k]/sum(pft[j,])*100
+     }
+  }
+  m=which(is.nan(pft_temp[,1]) == TRUE)
+  pft_temp[m,4]=100
+  pft_temp[m,1:3]=0
+  pft_temp[m,5:16]=0
+  ncvar_put(nc,'PFT',pft_temp)
+  nc_close(nc)
+}
+#---------test
+temp=array(0,c(n,1))
+for (i in seq(1,n)){
+  temp[i]=sum(pft_temp[i,])
+}
+
+#--------------write the PFT into surface data  ELM/CLM5
+library(ncdf4)
+surface="D:\\E3SM\\200m\\surfdata.200mx200m_UCPR_c20191106.nc"
+pft="D:\\E3SM\\200m\\2010.nc"
+nc_surface=nc_open(surface,write = TRUE)
+nc_pft=nc_open(pft)
+n=62246
+pft=ncvar_get(nc_pft,'PFT')
+nc_close(nc_pft)
+
+ncvar_put(nc_surface,'PCT_LAKE',pft[,13])
+# ncvar_put(nc_surface,'PCT_WETLAND',pft[,16])
+# ncvar_put(nc_surface,'PCT_URBAN',pft[,14],start = c(1,3),count = c(-1,1))
+ncvar_put(nc_surface,'PCT_URBAN',pft[,15]+pft[,14],start = c(1,3),count = c(-1,1))
+
+crop=array(0,c(n,1))
+veg=array(0,c(n,1))
+for (i in (seq(1,n))){
+  veg[i]=sum(pft[i,1:12])+pft[i,16]
+}
+
+ncvar_put(nc_surface,'PCT_NATVEG',veg)
+
+
+nat_pft=array(0,c(n,17))
+
+# write nat_pft
+nat_pft[,1]=pft[,1]/veg*100
+nat_pft[,2]=pft[,2]/veg*100
+nat_pft[,8]=(pft[,3]+pft[,11])/veg*100
+nat_pft[,11]=pft[,4]/veg/2*100
+nat_pft[,14]=pft[,4]/veg/2*100
+nat_pft[,16]=pft[,5]/veg*100
+for (i in seq(1,n)){
+  nat_pft[i,17]=100-sum(nat_pft[i,1:16])
+}
+
+k=which(is.nan(nat_pft[,1]) == TRUE)
+nat_pft[k,]=0
+nat_pft[k,1]=100
+ncvar_put(nc_surface,'PCT_NAT_PFT',nat_pft)
+
+
+# write cft --- for clm5
+#cft[,1]=pft[,5]/crop*100
+#cft[,2]=(pft[,6]+pft[,12])/crop*100
+#cft[,4]=pft[,7]/crop*100
+#cft[,6]=(pft[,8])/crop*100
+#cft[,8]=pft[,9]/crop*100
+#cft[,10]=pft[,10]/crop*100
+
+# modify HUC04
+#HUC=read.table('D:\\ZBW\\Watershed\\NEW\\Domain_new\\HUC04.txt',header= TRUE,sep = ",")
+#HUC_index=HUC[,3]
+#cft[HUC_index,7]=cft[HUC_index,8]
+#cft[HUC_index,8]=0
+#cft[HUC_index,1]=cft[HUC_index,2]+cft[HUC_index,1]
+#cft[HUC_index,2]=0
+
+
+#k=which(is.nan(cft[,1]) == TRUE)
+#cft[k,]=0
+#cft[k,1]=100
+#ncvar_put(nc_surface,'PCT_CFT',cft)
+nc_close(nc_surface)
+
+#----------------------timeseries-------------
+
+library(ncdf4)
+pft_dir="D:\\ZBW\\Watershed\\NEW\\PFT\\"
+pft_dir_name=list.files(pft_dir,full.names = TRUE)
+
+crop=array(0,c(4656,9))
+veg=array(0,c(4656,9))
+cft=array(0,c(4656,64,9))
+nat_pft=array(0,c(4656,15,9))
+
+for (j in seq(1,9)){
+  nc=nc_open(pft_dir_name[j])
+  pft=ncvar_get(nc,'PFT')
+  
+  for (i in (seq(1,4656))){
+    crop[i,j]=sum(pft[i,5:12])-pft[i,11]
+    veg[i,j]=sum(pft[i,1:4])+pft[i,11]
+  }
+  
+  # write nat_pft
+  nat_pft[,1,j]=pft[,1]/veg[,j]*100
+  nat_pft[,2,j]=pft[,2]/veg[,j]*100
+  nat_pft[,8,j]=(pft[,3]+pft[,11])/veg[,j]*100
+  nat_pft[,11,j]=pft[,4]/veg[,j]/2*100
+  nat_pft[,14,j]=pft[,4]/veg[,j]/2*100
+  k=which(is.nan(nat_pft[,1,j]) == TRUE)
+  nat_pft[k,,j]=0
+  nat_pft[k,1,j]=100
+  
+  # write cft
+  cft[,1,j]=pft[,5]/crop[,j]*100
+  cft[,2,j]=(pft[,6]+pft[,12])/crop[,j]*100
+  cft[,4,j]=pft[,7]/crop[,j]*100
+  cft[,6,j]=(pft[,8]+pft[,9])/crop[,j]*100
+  cft[,10,j]=pft[,10]/crop[,j]*100
+  k=which(is.nan(cft[,1,j]) == TRUE)
+  cft[k,,j]=0
+  cft[k,1,j]=100
+  
+  
+  nc_close(nc)
+  
+}
+
+nat_num=ncdim_def("NAT_PFT","each nat_pft",seq(1,15))
+cft_num=ncdim_def("CFT","each cft",seq(1,64))
+gridcell=ncdim_def("pft","gridcells",seq(1,4656))
+year=ncdim_def("YEAR","years",seq(1,9))
+var_NATPFT=ncvar_def(name="PCT_NAT_PFT",units = "percentage",dim = list(gridcell,nat_num,year), prec = 'double')
+var_CFT=ncvar_def(name="PCT_CFT",units = "percentage",dim = list(gridcell,cft_num,year), prec = 'double')
+var_CROP=ncvar_def(name="PCT_CROP",units = "percentage",dim = list(gridcell,year), prec = 'double')
+var_VEG=ncvar_def(name="PCT_VEG",units = "percentage",dim = list(gridcell,year), prec = 'double')
+output_dir="D:/ZBW/Watershed/NEW/"
+output=nc_create("D:/ZBW/Watershed/NEW/PFT_timeseries.nc",list(var_NATPFT,var_CFT,var_CROP,var_VEG))
+var_NATPFT=ncvar_put(output,var_NATPFT,nat_pft)
+var_CFT=ncvar_put(output,var_CFT,cft)
+var_CROP=ncvar_put(output,var_CROP,crop)
+var_VEG=ncvar_put(output,var_VEG,veg)
+nc_close(output)
+
+#------------modify the soil texture
+
+point_texture=read.table("D:\\ZBW\\Watershed\\NEW\\SOIL_TEXTURE.txt",header= TRUE,sep = ",")
+class_texture=read.table("D:\\ZBW\\Watershed\\NEW\\SOIL_CLASS.txt",header= TRUE,sep = ",")
+UCPR_texture=read.csv("D:\\ZBW\\Watershed\\NEW\\WaMUIDs.csv",header = TRUE, sep = ",")
+
+# fill the texture value which is NA
+k=which(is.na(point_texture[,17]) ==TRUE)
+point_texture[k,17]=point_texture[k+3,17]
+
+# join in the point value with texture class
+soil=array(0,c(4656,2))
+soil[,1]=point_texture[,17]
+
+for (i in seq(1,27)){
+  k=which(soil[,1] == class_texture[i,2]) 
+  soil[k,2]=class_texture[i,8]
+}
+
+PCT_SAND=array(0,c(4656,10))
+PCT_CLAY=array(0,c(4656,10))
+ORGANIC=array(0,c(4656,10))
+
+for (i in seq(1,27)){
+  k=which(soil[,2]== UCPR_texture[i,1])
+  s=20
+  o=17
+  c=18
+  for (j in seq(1,3)){
+    PCT_SAND[k,j]=UCPR_texture[i,s]
+    PCT_CLAY[k,j]=UCPR_texture[i,c]
+    ORGANIC[k,j]=UCPR_texture[i,o]
+    s=s+12
+    c=c+12
+    o=o+12
+  }
+  PCT_SAND[k,4:10]=PCT_SAND[k,3]
+  PCT_CLAY[k,4:10]=PCT_CLAY[k,3]
+
+}
+
+# check the value equal to zero
+
+k1=which(PCT_SAND[,1]==0)
+PCT_SAND[k1,]=mean(PCT_SAND[,1])
+k1=which(PCT_SAND[,2]==0)
+PCT_SAND[k1,2:10]=PCT_SAND[k1,1]
+k1=which(PCT_SAND[,3]==0)
+PCT_SAND[k1,3:10]=PCT_SAND[k1,2]
+
+k2=which(PCT_CLAY[,1]==0)
+PCT_CLAY[k2,]=mean(PCT_CLAY[,1])
+k2=which(PCT_CLAY[,2]==0)
+PCT_CLAY[k2,2:10]=PCT_CLAY[k2,1]
+k2=which(PCT_CLAY[,3]==0)
+PCT_CLAY[k2,3:10]=PCT_CLAY[k2,2]
+
+
+
+library(ncdf4)
+surface="D:\\ZBW\\Watershed\\NEW\\surfdata.1kmx1km_UCPR_c20190605.nc"
+nc_surface=nc_open(surface,write = TRUE)
+
+ncvar_put(nc_surface,'PCT_SAND',PCT_SAND)
+ncvar_put(nc_surface,'PCT_CLAY',PCT_CLAY)
+ncvar_put(nc_surface,'ORGANIC',ORGANIC)
+nc_close(nc_surface)
+
+#-----check output
+library(ncdf4)
+clm_result="D:\\E3SM\\200m\\surfdata.200mx200m_UCPR_c20191106.nc"
+result=array(0,c(62246,3))
+nc=nc_open(clm_result)
+
+landunit=ncvar_get(nc,'PCT_LAKE')
+
+nc_close(nc)
+result[,3]=landunit
+library(plot3D)
+library(raster)
+location=read.table("D:\\E3SM\\200m\\Domain\\dem1.txt",header= TRUE,sep = ",")
+result[,1]=location[,5]
+result[,2]=location[,6]
+r=rasterFromXYZ(result)
+domain=shapefile("D:\\E3SM\\NEW\\Domain\\domain.shp")
+river=shapefile("D:\\ZBW\\Watershed\\NEW\\LULC\\river.shp")
+plot(r,axes=FALSE)
+#plot(domain,add=TRUE)
+# plot(river,add=TRUE,col='blue')
